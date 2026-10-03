@@ -18,6 +18,14 @@
     Types - Easy, Difficult
     Noise - 0.05, 0.1, 0.15, 0.2
 
+Run `./scripts/run_noise.sh` to train a 4-tap LNN for 4,000 epochs on all eight
+Easy and Difficult datasets across noise levels 0.05, 0.1, 0.15, and 0.2.
+Each run's model, prediction errors, compressed residuals, and compression
+summary are saved under `output/noise/`. A timestamped
+`lnn_noise_robustness_*.csv` in the same directory records the noise level,
+dataset, compression rate, encoded bits, sample count, and artifact paths.
+Use `--taps`, `--epochs`, or `--output-csv PATH` to override the defaults.
+
 ### Memory Efficiency - Quantization
 
     Bitwidth - 4, 8, 12, 16, 32
@@ -80,3 +88,19 @@ along with the compressed residual payload. A timestamped
 `output/C_Easy1_noise01_dpcm_compression_*.csv` records the CR, encoded payload
 size, and paths to each method's prediction and compressed files. DPCM
 calculation and comparison logic are kept together in `src/dpcm.py`.
+
+### Quantizing trained LNN models
+
+Run `bash scripts/run_quantization.sh` to train LNNs for 4,000 epochs at tap
+counts `2, 3, 4, 5, 6, 7, 8, 16`, quantize each model, and run inference with
+each quantized model at 4, 8, 12, 16, and 32 bits. Formats are sign + integer +
+fraction bits: `1+2+1`, `1+2+5`, `1+2+9`, `1+4+11`, and `1+8+23`,
+respectively. Quantization rounds halfway values away from zero and saturates
+to the representable signed-magnitude range.
+
+Training artifacts are saved under `output/quantization/training/`. Each
+quantized inference writes its quantized checkpoint, prediction errors,
+compressed residuals, and per-run compression summary under
+`output/quantization/inference/`. A timestamped aggregate
+`quantization_summary_*.csv` reports CR and the format used for each run.
+CR uses the pipeline's 9-bit-per-sample reference and adaptive Golomb payload.

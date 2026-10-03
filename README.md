@@ -20,12 +20,10 @@ Submitted on: 31/07/2024
 Supervisor: Dipl.-Ing. Liyuan Guo
 Responsible Professor: Prof. Dr.-Ing. habil. Christian Mayr
 
-## LNN vs. DPCM
+## Original Document
 
+hpsn_sa_wei.pdf
 
+figure/
 
-## Hardware Implementation
-
-
-
-## RTL Design
+(visualization of python version is not included)
