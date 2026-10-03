@@ -20,10 +20,6 @@ Submitted on: 31/07/2024
 Supervisor: Dipl.-Ing. Liyuan Guo
 Responsible Professor: Prof. Dr.-Ing. habil. Christian Mayr
 
-## Original Document
-
-hpsn_sa_wei.pdf
-
-figure/
+(original documents in ORIGINAL_DOC/)
 
 (visualization of python version is not included)
