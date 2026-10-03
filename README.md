@@ -19,3 +19,13 @@ The Student thesis work is to be written in English.
 Submitted on: 31/07/2024
 Supervisor: Dipl.-Ing. Liyuan Guo
 Responsible Professor: Prof. Dr.-Ing. habil. Christian Mayr
+
+## LNN vs. DPCM
+
+
+
+## Hardware Implementation
+
+
+
+## RTL Design

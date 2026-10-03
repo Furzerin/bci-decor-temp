@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from src.data_prep import prepare_dataset
-from src.data_prep import normalization_factor, round_matlab
+from src.data_prep import round_matlab
 from src.dpcm import dpcm
 from src.gc_encode import adaptive_golomb_encode, write_compressed_file
 from src.lnn_model import predict_lnn, train_lnn
@@ -59,13 +59,46 @@ def _write_residual_csv(
             )
 
 
+def _write_compression_summary(path: Path, result: dict) -> None:
+    gc_result = result["gc_result"]
+    with path.open("w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(
+            (
+                "method",
+                "sample_count",
+                "residual_sample_count",
+                "encoded_bits",
+                "compression_ratio",
+                "cr_percent",
+                "compressed_file_bytes",
+                "prediction_errors_csv",
+                "compressed_file",
+            )
+        )
+        writer.writerow(
+            (
+                result["method"],
+                gc_result["sample_count"],
+                len(result["residual"]),
+                gc_result["encoded_bits"],
+                gc_result["compression_rate"],
+                gc_result["compression_rate_percent"],
+                gc_result["compressed_file_bytes"],
+                result["residual_path"],
+                result["compressed_path"],
+            )
+        )
+
+
 def run_pipeline(
     dataset_path: str,
     method: str = "LNN",
     taps: int = 4,
-    epochs: int = 250,
+    epochs: int = 4000,
     noise: str = "01",
     signal_type: str = "Easy",
+    output_root: str | Path = "output",
 ) -> dict:
     """Train the requested decorrelation method and assess it on the dataset."""
     normalized_method = method.upper()
@@ -73,28 +106,34 @@ def run_pipeline(
         raise ValueError(f"Unsupported method '{method}'. Use 'LNN', 'DPCM1', or 'DPCM2'.")
 
     prepared = prepare_dataset(dataset_path, data_dir="data")
-    raw_signal = prepared["source"]
     quantized_signal = prepared["normalized"]
 
-    output_dir = Path("output")
+    output_dir = Path(output_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     run_dir = _create_run_directory(output_dir, dataset_path, normalized_method, taps, epochs)
 
     if normalized_method == "LNN":
-        training_signal = raw_signal[:2000]
+        model_signal = quantized_signal / 128.0
+        training_signal = model_signal[:2000]
         if training_signal.size <= taps:
             raise ValueError(
                 f"LNN training requires more than {taps} samples; "
                 f"the first-2000-sample training segment has {training_signal.size}"
             )
-        trained = train_lnn(training_signal, taps=taps, epochs=epochs, learning_rate=1e-3, output_dir=str(run_dir), dataset_name=f"{signal_type}_noise{noise}")
-        effective_taps = trained["taps"]
-        scale = normalization_factor(raw_signal)
-        raw_prediction = np.zeros_like(raw_signal, dtype=np.float64)
-        raw_prediction[effective_taps:] = predict_lnn(
-            trained["model"], raw_signal, taps=effective_taps
+        trained = train_lnn(
+            training_signal,
+            taps=taps,
+            epochs=epochs,
+            learning_rate=5e-4,
+            output_dir=str(run_dir),
+            dataset_name=f"{signal_type}_noise{noise}",
         )
-        prediction = round_matlab(raw_prediction * scale)
+        effective_taps = trained["taps"]
+        normalized_prediction = np.zeros_like(model_signal, dtype=np.float64)
+        normalized_prediction[effective_taps:] = predict_lnn(
+            trained["model"], model_signal, taps=effective_taps
+        )
+        prediction = round_matlab(normalized_prediction * 128.0)
         true_values = quantized_signal
         residual = true_values - prediction
         residual_path = run_dir / "prediction_errors.csv"
@@ -104,7 +143,10 @@ def run_pipeline(
             "residual": residual,
             "prediction": prediction,
             "mse": float(
-                ((raw_signal[effective_taps:] - raw_prediction[effective_taps:]) ** 2).mean()
+                (
+                    (quantized_signal[effective_taps:] - prediction[effective_taps:])
+                    ** 2
+                ).mean()
             ),
             "model_path": trained["model_path"],
             "run_dir": str(run_dir),
@@ -151,6 +193,9 @@ def run_pipeline(
     result["cr_percent"] = gc_result["compression_rate_percent"]
     result["compression_ratio"] = gc_result["compression_rate"]
     result["compressed_path"] = str(compressed_path)
+    compression_summary_path = run_dir / "compression_summary.csv"
+    _write_compression_summary(compression_summary_path, result)
+    result["compression_summary_path"] = str(compression_summary_path)
     return result
 
 
@@ -159,9 +204,10 @@ def main() -> None:
     parser.add_argument("--dataset", default="dataset/C_Easy1_noise01.mat")
     parser.add_argument("--method", choices=("LNN", "DPCM1", "DPCM2"), default="LNN")
     parser.add_argument("--taps", type=int, default=4, help="Number of previous samples used by the LNN.")
-    parser.add_argument("--epochs", type=int, default=250, help="Number of LNN training epochs.")
+    parser.add_argument("--epochs", type=int, default=4000, help="Number of LNN training epochs.")
     parser.add_argument("--noise", default="01")
     parser.add_argument("--signal-type", default="Easy")
+    parser.add_argument("--output-root", default="output")
     args = parser.parse_args()
 
     result = run_pipeline(
@@ -171,6 +217,7 @@ def main() -> None:
         epochs=args.epochs,
         noise=args.noise,
         signal_type=args.signal_type,
+        output_root=args.output_root,
     )
     print(f"Method: {result['method']}")
     print(f"MSE: {result['mse']:.6f}")
@@ -179,6 +226,7 @@ def main() -> None:
     print(f"Compressed output: {result['compressed_path']}")
     print(f"Run directory: {result['run_dir']}")
     print(f"Prediction errors: {result['residual_path']}")
+    print(f"Compression summary: {result['compression_summary_path']}")
     if "model_path" in result:
         print(f"Trained model: {result['model_path']}")
 

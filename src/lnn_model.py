@@ -18,7 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - numpy fallback used in tests.
 
 
 class NumPyLinearNetwork:
-    """Simple linear regression model that supports the same API as torch."""
+    """Linear network trained with sample-wise Widrow-Hoff updates."""
 
     def __init__(self, taps: int, learning_rate: float = 1e-3, weight_decay: float = 0.0):
         self.taps = int(taps)
@@ -33,31 +33,36 @@ class NumPyLinearNetwork:
             inputs = inputs.reshape(1, -1)
         return inputs @ self.weights + self.bias
 
-    def fit(self, X: np.ndarray, y: np.ndarray, epochs: int = 200, scheduler_step: int = 25) -> List[float]:
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        epochs: int = 200,
+        scheduler_step: int | None = None,
+    ) -> List[float]:
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
         if X.ndim == 1:
             X = X.reshape(-1, 1)
         if X.shape[0] != y.shape[0]:
             raise ValueError("X and y need the same number of rows")
+        if X.shape[0] == 0:
+            raise ValueError("Training data must contain at least one sample")
 
         history: List[float] = []
         lr = self.learning_rate
         for epoch in range(epochs):
-            prediction = self.predict(X)
-            residual = prediction - y
-            mse = float(np.mean(residual ** 2))
-            history.append(mse)
+            squared_error = 0.0
+            for inputs, target in zip(X, y):
+                error = float(target - (inputs @ self.weights + self.bias))
+                squared_error += error * error
+                self.weights += lr * error * inputs
+                if self.weight_decay:
+                    self.weights -= 2.0 * lr * self.weight_decay * self.weights
+                self.bias += lr * error
+            history.append(squared_error / X.shape[0])
 
-            grad_w = (2.0 / len(X)) * (X.T @ residual)
-            grad_b = 2.0 * residual.mean()
-            if self.weight_decay:
-                grad_w += 2.0 * self.weight_decay * self.weights
-
-            self.weights -= lr * grad_w
-            self.bias -= lr * grad_b
-
-            if (epoch + 1) % scheduler_step == 0:
+            if scheduler_step and (epoch + 1) % scheduler_step == 0:
                 lr *= 0.7
 
         return history
@@ -69,6 +74,19 @@ class NumPyLinearNetwork:
     def save(self, path: str | Path) -> None:
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
+        if output.suffix.lower() == ".pt":
+            if torch is None:
+                raise ModuleNotFoundError("PyTorch is required to save an LNN model as .pt")
+            torch.save(
+                {
+                    "format": "numpy_linear_network",
+                    "weights": torch.as_tensor(self.weights, dtype=torch.float64),
+                    "bias": torch.tensor(self.bias, dtype=torch.float64),
+                    "taps": self.taps,
+                },
+                output,
+            )
+            return
         np.savez(output, weights=self.weights, bias=self.bias, taps=self.taps)
 
     @classmethod
@@ -137,7 +155,7 @@ def _ensure_taps(signal: Sequence[float], taps: int) -> int:
     return total
 
 
-def train_lnn(signal: np.ndarray, taps: int = 4, epochs: int = 200, learning_rate: float = 1e-3, validation_signal: np.ndarray | None = None, output_dir: str = "output", dataset_name: str = "signal") -> Dict[str, Any]:
+def train_lnn(signal: np.ndarray, taps: int = 4, epochs: int = 200, learning_rate: float = 5e-4, validation_signal: np.ndarray | None = None, output_dir: str = "output", dataset_name: str = "signal") -> Dict[str, Any]:
     """Train a linear neural network on lagged versions of the input signal."""
     from .data_prep import make_lagged_dataset
 
@@ -148,22 +166,6 @@ def train_lnn(signal: np.ndarray, taps: int = 4, epochs: int = 200, learning_rat
         y_val = y_train
     else:
         X_val, y_val = make_lagged_dataset(np.asarray(validation_signal, dtype=np.float64), taps=taps)
-
-    if torch is not None:
-        model = TorchLinearNetwork(taps=taps, learning_rate=learning_rate)
-        history = model.fit(X_train, y_train, epochs=epochs)
-        val_mse = model.evaluate(X_val, y_val)
-        model_path = Path(output_dir) / f"{dataset_name}_lnn_taps{taps}_epoch{epochs}.pt"
-        model.save(model_path)
-        return {
-            "model": model,
-            "history": history,
-            "validation_mse": val_mse,
-            "taps": taps,
-            "model_path": str(model_path),
-            "weights": model.model[0].weight.detach().numpy().reshape(-1),
-            "bias": float(model.model[0].bias.detach().item()),
-        }
 
     model = NumPyLinearNetwork(taps=taps, learning_rate=learning_rate)
     history = model.fit(X_train, y_train, epochs=epochs)
@@ -224,6 +226,12 @@ def save_lnn_model(model: Any, path: str | Path) -> None:
 def load_lnn_model(path: str | Path, taps: int = 4, learning_rate: float = 1e-3) -> Any:
     payload = Path(path)
     if payload.suffix.lower() == ".pt" and torch is not None:
+        checkpoint = torch.load(payload, map_location="cpu", weights_only=True)
+        if checkpoint.get("format") == "numpy_linear_network":
+            model = NumPyLinearNetwork(int(checkpoint["taps"]))
+            model.weights = checkpoint["weights"].numpy().astype(np.float64)
+            model.bias = float(checkpoint["bias"].item())
+            return model
         return TorchLinearNetwork.load(payload, taps=taps, learning_rate=learning_rate)
     if payload.suffix.lower() == ".npz":
         return NumPyLinearNetwork.load(payload)
